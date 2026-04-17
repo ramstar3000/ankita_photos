@@ -4,7 +4,7 @@ import { fromCognitoIdentityPool } from "@aws-sdk/credential-providers";
 // ===== CONFIGURATION — edit these values =====
 const CONFIG = {
   REGION: "us-east-1",
-  IDENTITY_POOL_ID: "us-east-1:REPLACE-WITH-YOUR-IDENTITY-POOL-ID",
+  IDENTITY_POOL_ID: "us-east-1:e9dce307-e5bc-4924-acf4-2f875452dbfc",
   BUCKET: "ankita-photos-upload",
   PREFIX: "uploads/",
   PASSWORD: "photos2026",
