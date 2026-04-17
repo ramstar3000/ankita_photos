@@ -1,5 +1,6 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { fromCognitoIdentityPool } from "@aws-sdk/credential-providers";
+import { fromCognitoIdentityPool } from "@aws-sdk/credential-provider-cognito-identity";
+import { CognitoIdentityClient } from "@aws-sdk/client-cognito-identity";
 
 // ===== CONFIGURATION — edit these values =====
 const CONFIG = {
@@ -38,7 +39,7 @@ function getS3Client() {
     s3Client = new S3Client({
       region: CONFIG.REGION,
       credentials: fromCognitoIdentityPool({
-        clientConfig: { region: CONFIG.REGION },
+        client: new CognitoIdentityClient({ region: CONFIG.REGION }),
         identityPoolId: CONFIG.IDENTITY_POOL_ID,
       }),
     });
