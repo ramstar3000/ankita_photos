@@ -1,6 +1,3 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { CognitoIdentityClient, GetIdCommand, GetCredentialsForIdentityCommand } from "@aws-sdk/client-cognito-identity";
-
 // ===== CONFIGURATION — edit these values =====
 const CONFIG = {
   REGION: "us-east-1",
@@ -11,9 +8,16 @@ const CONFIG = {
   MAX_FILE_SIZE_MB: 50,
 };
 
+// ===== AWS Setup =====
+AWS.config.region = CONFIG.REGION;
+AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+  IdentityPoolId: CONFIG.IDENTITY_POOL_ID,
+});
+
+const s3 = new AWS.S3({ apiVersion: "2006-03-01" });
+
 // ===== State =====
 let selectedFiles = [];
-let s3Client = null;
 let toastTimer = null;
 
 // ===== DOM =====
@@ -37,46 +41,13 @@ const historyList = $("history-list");
 const clearHistoryBtn = $("clear-history-btn");
 
 // ===== Toast Notifications =====
-function showToast(message, type = "success", duration = 4000) {
+function showToast(message, type, duration) {
+  type = type || "success";
+  duration = duration || 4000;
   clearTimeout(toastTimer);
   toast.textContent = message;
   toast.className = type;
-  toastTimer = setTimeout(() => { toast.className = "hidden"; }, duration);
-}
-
-// ===== Cognito Credentials (manual, no fs dependency) =====
-let cachedCredentials = null;
-let credentialsExpiry = 0;
-
-async function getCognitoCredentials() {
-  if (cachedCredentials && Date.now() < credentialsExpiry) {
-    return cachedCredentials;
-  }
-  const cognitoClient = new CognitoIdentityClient({ region: CONFIG.REGION });
-  const { IdentityId } = await cognitoClient.send(
-    new GetIdCommand({ IdentityPoolId: CONFIG.IDENTITY_POOL_ID })
-  );
-  const { Credentials } = await cognitoClient.send(
-    new GetCredentialsForIdentityCommand({ IdentityId })
-  );
-  cachedCredentials = {
-    accessKeyId: Credentials.AccessKeyId,
-    secretAccessKey: Credentials.SecretKey,
-    sessionToken: Credentials.SessionToken,
-  };
-  // Refresh 5 min before expiry
-  credentialsExpiry = Credentials.Expiration.getTime() - 5 * 60 * 1000;
-  return cachedCredentials;
-}
-
-// ===== S3 Client =====
-async function getS3Client() {
-  const credentials = await getCognitoCredentials();
-  // Recreate client if credentials were refreshed
-  if (!s3Client || Date.now() >= credentialsExpiry) {
-    s3Client = new S3Client({ region: CONFIG.REGION, credentials });
-  }
-  return s3Client;
+  toastTimer = setTimeout(function() { toast.className = "hidden"; }, duration);
 }
 
 // ===== Password Gate =====
@@ -86,7 +57,7 @@ function checkSession() {
   }
 }
 
-passwordForm.addEventListener("submit", (e) => {
+passwordForm.addEventListener("submit", function(e) {
   e.preventDefault();
   if (passwordInput.value === CONFIG.PASSWORD) {
     sessionStorage.setItem("photo_auth", "true");
@@ -94,7 +65,7 @@ passwordForm.addEventListener("submit", (e) => {
   } else {
     passwordError.classList.remove("hidden");
     passwordForm.classList.add("shake");
-    setTimeout(() => passwordForm.classList.remove("shake"), 400);
+    setTimeout(function() { passwordForm.classList.remove("shake"); }, 400);
     passwordInput.value = "";
     passwordInput.focus();
   }
@@ -106,46 +77,48 @@ function showUploadSection() {
 }
 
 // ===== File Selection =====
-dropZone.addEventListener("click", () => fileInput.click());
-chooseBtn.addEventListener("click", () => fileInput.click());
-cameraBtn.addEventListener("click", () => cameraInput.click());
+dropZone.addEventListener("click", function() { fileInput.click(); });
+chooseBtn.addEventListener("click", function() { fileInput.click(); });
+cameraBtn.addEventListener("click", function() { cameraInput.click(); });
 
-fileInput.addEventListener("change", () => {
+fileInput.addEventListener("change", function() {
   addFiles(fileInput.files);
   fileInput.value = "";
 });
 
-cameraInput.addEventListener("change", () => {
+cameraInput.addEventListener("change", function() {
   addFiles(cameraInput.files);
   cameraInput.value = "";
 });
 
 // Drag and drop
-dropZone.addEventListener("dragenter", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
-dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
-dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
-dropZone.addEventListener("drop", (e) => {
+dropZone.addEventListener("dragenter", function(e) { e.preventDefault(); dropZone.classList.add("dragover"); });
+dropZone.addEventListener("dragover", function(e) { e.preventDefault(); dropZone.classList.add("dragover"); });
+dropZone.addEventListener("dragleave", function() { dropZone.classList.remove("dragover"); });
+dropZone.addEventListener("drop", function(e) {
   e.preventDefault();
   dropZone.classList.remove("dragover");
   addFiles(e.dataTransfer.files);
 });
 
 function addFiles(fileList) {
-  let skipped = 0;
-  for (const file of fileList) {
+  var skipped = 0;
+  for (var i = 0; i < fileList.length; i++) {
+    var file = fileList[i];
     if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
       skipped++;
       continue;
     }
     if (file.size > CONFIG.MAX_FILE_SIZE_MB * 1024 * 1024) {
-      showToast(`"${file.name}" exceeds ${CONFIG.MAX_FILE_SIZE_MB} MB limit`, "warn", 5000);
+      showToast('"' + file.name + '" exceeds ' + CONFIG.MAX_FILE_SIZE_MB + " MB limit", "warn", 5000);
       continue;
     }
-    if (selectedFiles.some((f) => f.name === file.name && f.size === file.size)) continue;
+    var isDuplicate = selectedFiles.some(function(f) { return f.name === file.name && f.size === file.size; });
+    if (isDuplicate) continue;
     selectedFiles.push(file);
   }
   if (skipped > 0) {
-    showToast(`${skipped} file${skipped > 1 ? "s" : ""} skipped (unsupported format)`, "warn");
+    showToast(skipped + " file" + (skipped > 1 ? "s" : "") + " skipped (unsupported format)", "warn");
   }
   renderQueue();
 }
@@ -157,17 +130,20 @@ function removeFile(index) {
 
 function renderQueue() {
   uploadQueue.innerHTML = "";
-  selectedFiles.forEach((file, i) => {
-    const card = document.createElement("div");
+  selectedFiles.forEach(function(file, i) {
+    var card = document.createElement("div");
     card.className = "file-card";
     card.dataset.index = i;
 
-    const thumb = document.createElement(file.type.startsWith("video/") ? "div" : "img");
-    thumb.className = "thumb";
+    var thumb;
     if (file.type.startsWith("image/")) {
+      thumb = document.createElement("img");
+      thumb.className = "thumb";
       thumb.src = URL.createObjectURL(file);
       thumb.alt = file.name;
     } else {
+      thumb = document.createElement("div");
+      thumb.className = "thumb";
       thumb.textContent = "\uD83C\uDFAC";
       thumb.style.display = "flex";
       thumb.style.alignItems = "center";
@@ -175,16 +151,18 @@ function renderQueue() {
       thumb.style.fontSize = "1.5rem";
     }
 
-    const info = document.createElement("div");
+    var info = document.createElement("div");
     info.className = "info";
-    info.innerHTML = `<div class="name">${escapeHtml(file.name)}</div><div class="size">${formatSize(file.size)}</div>`;
+    info.innerHTML = '<div class="name">' + escapeHtml(file.name) + '</div><div class="size">' + formatSize(file.size) + "</div>";
 
-    const removeBtn = document.createElement("button");
+    var removeBtn = document.createElement("button");
     removeBtn.className = "remove";
     removeBtn.textContent = "\u00D7";
-    removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeFile(i); });
+    removeBtn.addEventListener("click", (function(idx) {
+      return function(e) { e.stopPropagation(); removeFile(idx); };
+    })(i));
 
-    const progressBar = document.createElement("div");
+    var progressBar = document.createElement("div");
     progressBar.className = "progress-bar";
     progressBar.style.width = "0%";
 
@@ -193,7 +171,7 @@ function renderQueue() {
   });
 
   if (selectedFiles.length > 0) {
-    uploadBtn.textContent = `Upload ${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""}`;
+    uploadBtn.textContent = "Upload " + selectedFiles.length + " file" + (selectedFiles.length > 1 ? "s" : "");
     uploadBtn.classList.remove("hidden");
   } else {
     uploadBtn.classList.add("hidden");
@@ -201,127 +179,132 @@ function renderQueue() {
 }
 
 // ===== Upload =====
-uploadBtn.addEventListener("click", () => uploadAll());
+uploadBtn.addEventListener("click", function() { uploadAll(); });
 
-async function uploadAll() {
-  const files = [...selectedFiles];
+function uploadAll() {
+  var files = selectedFiles.slice();
   if (files.length === 0) return;
 
   uploadBtn.disabled = true;
   uploadBtn.textContent = "Uploading...";
 
   // Hide remove buttons during upload
-  document.querySelectorAll(".file-card .remove").forEach((b) => (b.style.display = "none"));
+  document.querySelectorAll(".file-card .remove").forEach(function(b) { b.style.display = "none"; });
 
-  const MAX_CONCURRENT = 3;
-  const queue = files.map((f, i) => ({ file: f, index: i }));
-  let successCount = 0;
-  let errorCount = 0;
+  var completed = 0;
+  var successCount = 0;
+  var errorCount = 0;
 
-  const workers = Array(Math.min(MAX_CONCURRENT, queue.length))
-    .fill(null)
-    .map(async () => {
-      while (queue.length > 0) {
-        const { file, index } = queue.shift();
-        const card = uploadQueue.children[index];
-        card.classList.add("uploading");
-        card.querySelector(".progress-bar").style.width = "60%";
+  files.forEach(function(file, index) {
+    var card = uploadQueue.children[index];
+    card.classList.add("uploading");
 
-        try {
-          await uploadFile(file);
-          card.classList.remove("uploading");
-          card.classList.add("done");
-          const icon = document.createElement("span");
-          icon.className = "status-icon";
-          icon.textContent = "\u2713";
-          icon.style.color = "var(--success)";
-          card.querySelector(".remove")?.replaceWith(icon);
-          successCount++;
-        } catch (err) {
-          card.classList.remove("uploading");
+    var key = CONFIG.PREFIX + Date.now() + "-" + Math.random().toString(36).substr(2, 6) + "-" + sanitizeFilename(file.name);
+
+    var params = {
+      Bucket: CONFIG.BUCKET,
+      Key: key,
+      Body: file,
+      ContentType: file.type,
+    };
+
+    var progressBar = card.querySelector(".progress-bar");
+
+    s3.upload(params)
+      .on("httpUploadProgress", function(evt) {
+        if (evt.total) {
+          var pct = Math.round((evt.loaded / evt.total) * 100);
+          progressBar.style.width = pct + "%";
+        }
+      })
+      .send(function(err) {
+        card.classList.remove("uploading");
+        var icon = document.createElement("span");
+        icon.className = "status-icon";
+
+        if (err) {
           card.classList.add("error");
-          const icon = document.createElement("span");
-          icon.className = "status-icon";
           icon.textContent = "\u2717";
           icon.style.color = "var(--error)";
-          card.querySelector(".remove")?.replaceWith(icon);
-          console.error(`Upload failed for ${file.name}:`, err);
+          console.error("Upload failed for " + file.name + ":", err);
           errorCount++;
+        } else {
+          card.classList.add("done");
+          icon.textContent = "\u2713";
+          icon.style.color = "var(--success)";
+          saveToHistory({ name: file.name, size: file.size, key: key, uploadedAt: new Date().toISOString() });
+          successCount++;
         }
-      }
-    });
 
-  await Promise.all(workers);
+        var removeEl = card.querySelector(".remove");
+        if (removeEl) removeEl.replaceWith(icon);
 
+        completed++;
+        if (completed === files.length) {
+          onAllDone(successCount, errorCount);
+        }
+      });
+  });
+}
+
+function onAllDone(successCount, errorCount) {
   if (errorCount === 0) {
-    showToast(`${successCount} file${successCount > 1 ? "s" : ""} uploaded successfully!`, "success", 5000);
+    showToast(successCount + " file" + (successCount > 1 ? "s" : "") + " uploaded successfully!", "success", 5000);
     selectedFiles = [];
-    // Clear queue after a short delay so user sees the green checkmarks
-    setTimeout(() => {
+    setTimeout(function() {
       uploadQueue.innerHTML = "";
       uploadBtn.classList.add("hidden");
       uploadBtn.disabled = false;
     }, 2000);
   } else {
-    showToast(`${successCount} uploaded, ${errorCount} failed. Please try again.`, "fail", 8000);
+    showToast(successCount + " uploaded, " + errorCount + " failed. Please try again.", "fail", 8000);
     uploadBtn.disabled = false;
     uploadBtn.textContent = "Retry failed";
   }
-}
-
-async function uploadFile(file) {
-  const key = CONFIG.PREFIX + Date.now() + "-" + sanitizeFilename(file.name);
-  const command = new PutObjectCommand({
-    Bucket: CONFIG.BUCKET,
-    Key: key,
-    Body: file,
-    ContentType: file.type,
-  });
-  const client = await getS3Client();
-  await client.send(command);
-  saveToHistory({ name: file.name, size: file.size, key, uploadedAt: new Date().toISOString() });
 }
 
 // ===== Upload History (localStorage) =====
 function getHistory() {
   try {
     return JSON.parse(localStorage.getItem("photo_uploads") || "[]");
-  } catch {
+  } catch (e) {
     return [];
   }
 }
 
 function saveToHistory(entry) {
-  const history = getHistory();
+  var history = getHistory();
   history.unshift(entry);
   localStorage.setItem("photo_uploads", JSON.stringify(history));
   renderHistory();
 }
 
 function renderHistory() {
-  const history = getHistory();
+  var history = getHistory();
   if (history.length === 0) {
     historySection.classList.add("hidden");
     return;
   }
 
   historySection.classList.remove("hidden");
-  historyCount.textContent = `${history.length}`;
+  historyCount.textContent = history.length;
 
   historyList.innerHTML = "";
-  history.forEach((entry, i) => {
-    const row = document.createElement("div");
+  history.forEach(function(entry, i) {
+    var row = document.createElement("div");
     row.className = "history-row";
 
-    const info = document.createElement("div");
+    var info = document.createElement("div");
     info.className = "history-info";
-    const date = new Date(entry.uploadedAt);
-    info.innerHTML = `<span class="history-name">${escapeHtml(entry.name)}</span><span class="history-meta">${formatSize(entry.size)} \u00B7 ${formatDate(date)}</span>`;
+    var date = new Date(entry.uploadedAt);
+    info.innerHTML = '<span class="history-name">' + escapeHtml(entry.name) + '</span><span class="history-meta">' + formatSize(entry.size) + " \u00B7 " + formatDate(date) + "</span>";
 
-    const deleteBtn = document.createElement("button");
+    var deleteBtn = document.createElement("button");
     deleteBtn.className = "history-delete";
     deleteBtn.textContent = "Remove";
-    deleteBtn.addEventListener("click", () => deleteUpload(i, entry.key));
+    deleteBtn.addEventListener("click", (function(idx, key) {
+      return function() { deleteUpload(idx, key); };
+    })(i, entry.key));
 
     row.append(info, deleteBtn);
     historyList.appendChild(row);
@@ -330,27 +313,24 @@ function renderHistory() {
   clearHistoryBtn.classList.toggle("hidden", history.length < 2);
 }
 
-async function deleteUpload(index, key) {
-  const row = historyList.children[index];
-  const btn = row.querySelector(".history-delete");
+function deleteUpload(index, key) {
+  var row = historyList.children[index];
+  var btn = row.querySelector(".history-delete");
   btn.textContent = "Removing...";
   btn.disabled = true;
 
-  try {
-    const client = await getS3Client();
-    await client.send(new DeleteObjectCommand({ Bucket: CONFIG.BUCKET, Key: key }));
-  } catch (err) {
-    console.warn("S3 delete failed (file may already be gone):", err);
-  }
+  s3.deleteObject({ Bucket: CONFIG.BUCKET, Key: key }, function(err) {
+    if (err) console.warn("S3 delete failed (file may already be gone):", err);
 
-  const history = getHistory();
-  history.splice(index, 1);
-  localStorage.setItem("photo_uploads", JSON.stringify(history));
-  renderHistory();
-  showToast("File removed", "success", 3000);
+    var history = getHistory();
+    history.splice(index, 1);
+    localStorage.setItem("photo_uploads", JSON.stringify(history));
+    renderHistory();
+    showToast("File removed", "success", 3000);
+  });
 }
 
-clearHistoryBtn.addEventListener("click", () => {
+clearHistoryBtn.addEventListener("click", function() {
   localStorage.removeItem("photo_uploads");
   renderHistory();
 });
@@ -367,18 +347,18 @@ function formatSize(bytes) {
 }
 
 function formatDate(date) {
-  const now = new Date();
-  const diffMs = now - date;
-  const diffMins = Math.floor(diffMs / 60000);
+  var now = new Date();
+  var diffMs = now - date;
+  var diffMins = Math.floor(diffMs / 60000);
   if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffMins < 60) return diffMins + "m ago";
+  var diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return diffHours + "h ago";
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function escapeHtml(str) {
-  const div = document.createElement("div");
+  var div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
 }
