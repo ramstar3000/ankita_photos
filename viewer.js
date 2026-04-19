@@ -1,9 +1,4 @@
-// Shared config (must match app.js)
-var CONFIG = {
-  REGION: "us-east-1",
-  IDENTITY_POOL_ID: "us-east-1:e9dce307-e5bc-4924-acf4-2f875452dbfc",
-  BUCKET: "ankita-photos-upload",
-};
+// CONFIG is loaded from config.js
 
 // AWS Setup
 AWS.config.region = CONFIG.REGION;
@@ -13,12 +8,16 @@ AWS.config.credentials = new AWS.CognitoIdentityCredentials({
 var s3 = new AWS.S3({ apiVersion: "2006-03-01" });
 
 // State
+var isAdmin = sessionStorage.getItem("photo_admin") === "true";
 var currentIndex = -1;
+var photoList = []; // unified list used for rendering
 
 // DOM
 var photoGrid = document.getElementById("photo-grid");
 var emptyState = document.getElementById("empty-state");
+var viewerTitle = document.getElementById("viewer-title");
 var viewerCount = document.getElementById("viewer-count");
+var viewerLoading = document.getElementById("viewer-loading");
 var lightbox = document.getElementById("lightbox");
 var lightboxImg = document.getElementById("lightbox-img");
 var lightboxName = document.getElementById("lightbox-name");
@@ -26,6 +25,7 @@ var lightboxMeta = document.getElementById("lightbox-meta");
 var lightboxClose = document.getElementById("lightbox-close");
 var lightboxPrev = document.getElementById("lightbox-prev");
 var lightboxNext = document.getElementById("lightbox-next");
+var lightboxDelete = document.getElementById("lightbox-delete");
 
 // History helpers
 function getHistory() {
@@ -57,11 +57,64 @@ function getSignedUrl(key) {
   });
 }
 
-// Render grid
-function renderGrid() {
-  var history = getHistory();
+// ===== Load photos =====
+function loadPhotos(callback) {
+  if (isAdmin) {
+    // Admin: list all objects from S3
+    viewerTitle.innerHTML = 'All Photos <span class="admin-badge">Admin</span>';
+    viewerLoading.classList.remove("hidden");
+    listAllObjects([], null, function(objects) {
+      viewerLoading.classList.add("hidden");
+      // Sort by key (which contains timestamp) descending
+      objects.sort(function(a, b) { return b.Key.localeCompare(a.Key); });
+      photoList = objects.map(function(obj) {
+        // Extract original filename from key: uploads/TIMESTAMP-RANDOM-filename.jpg
+        var parts = obj.Key.replace(CONFIG.PREFIX, "").split("-");
+        var name = parts.length > 2 ? parts.slice(2).join("-") : obj.Key;
+        return {
+          key: obj.Key,
+          name: name,
+          size: obj.Size,
+          lastModified: obj.LastModified,
+        };
+      });
+      callback();
+    });
+  } else {
+    // Normal user: use localStorage history
+    viewerTitle.textContent = "Your Photos";
+    photoList = getHistory();
+    callback();
+  }
+}
 
-  if (history.length === 0) {
+function listAllObjects(accumulated, continuationToken, callback) {
+  var params = {
+    Bucket: CONFIG.BUCKET,
+    Prefix: CONFIG.PREFIX,
+    MaxKeys: 1000,
+  };
+  if (continuationToken) {
+    params.ContinuationToken = continuationToken;
+  }
+  s3.listObjectsV2(params, function(err, data) {
+    if (err) {
+      console.error("Failed to list objects:", err);
+      callback(accumulated);
+      return;
+    }
+    var objects = accumulated.concat(data.Contents || []);
+    if (data.IsTruncated) {
+      listAllObjects(objects, data.NextContinuationToken, callback);
+    } else {
+      callback(objects);
+    }
+  });
+}
+
+// ===== Render grid =====
+function renderGrid() {
+  if (photoList.length === 0) {
     emptyState.classList.remove("hidden");
     photoGrid.innerHTML = "";
     viewerCount.textContent = "";
@@ -69,21 +122,18 @@ function renderGrid() {
   }
 
   emptyState.classList.add("hidden");
-  viewerCount.textContent = history.length + " photo" + (history.length !== 1 ? "s" : "") + " from this device";
+  var label = isAdmin ? " total photos in cloud" : " photo" + (photoList.length !== 1 ? "s" : "") + " from this device";
+  viewerCount.textContent = photoList.length + label;
 
   photoGrid.innerHTML = "";
-  history.forEach(function(entry, i) {
+  photoList.forEach(function(entry, i) {
     var tile = document.createElement("div");
     tile.className = "photo-tile";
 
-    var isVideo = entry.name && (
-      entry.name.toLowerCase().endsWith(".mp4") ||
-      entry.name.toLowerCase().endsWith(".mov") ||
-      entry.name.toLowerCase().endsWith(".webm")
-    );
+    var fileName = entry.name || entry.key || "";
+    var isVideo = fileName.toLowerCase().match(/\.(mp4|mov|webm|avi)$/);
 
     if (isVideo) {
-      // Show video placeholder
       var placeholder = document.createElement("div");
       placeholder.className = "tile-loading";
       placeholder.textContent = "\uD83C\uDFAC";
@@ -95,15 +145,13 @@ function renderGrid() {
       badge.textContent = "VIDEO";
       tile.appendChild(badge);
     } else {
-      // Show loading state
       var loading = document.createElement("div");
       loading.className = "tile-loading";
       loading.textContent = "Loading...";
       tile.appendChild(loading);
 
-      // Load image via presigned URL — set src after handlers are attached
       var img = document.createElement("img");
-      img.alt = entry.name;
+      img.alt = fileName;
       img.loading = "lazy";
       img.style.opacity = "0";
       img.style.transition = "opacity 0.3s";
@@ -131,20 +179,33 @@ function renderGrid() {
   });
 }
 
-// Lightbox
+// ===== Lightbox =====
 function openLightbox(index) {
-  var history = getHistory();
-  if (index < 0 || index >= history.length) return;
+  if (index < 0 || index >= photoList.length) return;
 
   currentIndex = index;
-  var entry = history[index];
+  var entry = photoList[index];
 
   lightboxImg.src = getSignedUrl(entry.key);
-  lightboxName.textContent = entry.name;
-  lightboxMeta.textContent = formatSize(entry.size) + " \u00B7 " + formatDate(new Date(entry.uploadedAt));
+  lightboxName.textContent = entry.name || entry.key;
+
+  var metaParts = [];
+  if (entry.size) metaParts.push(formatSize(entry.size));
+  if (entry.uploadedAt) metaParts.push(formatDate(new Date(entry.uploadedAt)));
+  else if (entry.lastModified) metaParts.push(formatDate(new Date(entry.lastModified)));
+  lightboxMeta.textContent = metaParts.join(" \u00B7 ");
 
   lightboxPrev.style.display = index > 0 ? "" : "none";
-  lightboxNext.style.display = index < history.length - 1 ? "" : "none";
+  lightboxNext.style.display = index < photoList.length - 1 ? "" : "none";
+
+  // Show delete button only for admin
+  if (isAdmin) {
+    lightboxDelete.classList.remove("hidden");
+    lightboxDelete.disabled = false;
+    lightboxDelete.textContent = "Delete Photo";
+  } else {
+    lightboxDelete.classList.add("hidden");
+  }
 
   lightbox.classList.remove("hidden");
   document.body.style.overflow = "hidden";
@@ -172,11 +233,9 @@ lightboxPrev.addEventListener("click", function(e) {
 
 lightboxNext.addEventListener("click", function(e) {
   e.stopPropagation();
-  var history = getHistory();
-  if (currentIndex < history.length - 1) openLightbox(currentIndex + 1);
+  if (currentIndex < photoList.length - 1) openLightbox(currentIndex + 1);
 });
 
-// Keyboard nav
 document.addEventListener("keydown", function(e) {
   if (lightbox.classList.contains("hidden")) return;
   if (e.key === "Escape") closeLightbox();
@@ -184,12 +243,35 @@ document.addEventListener("keydown", function(e) {
   if (e.key === "ArrowRight") lightboxNext.click();
 });
 
-// Init — wait for Cognito credentials before rendering
+// Admin delete
+lightboxDelete.addEventListener("click", function(e) {
+  e.stopPropagation();
+  if (!isAdmin || currentIndex < 0 || currentIndex >= photoList.length) return;
+
+  var entry = photoList[currentIndex];
+  lightboxDelete.textContent = "Deleting...";
+  lightboxDelete.disabled = true;
+
+  s3.deleteObject({ Bucket: CONFIG.BUCKET, Key: entry.key }, function(err) {
+    if (err) {
+      console.error("Delete failed:", err);
+      lightboxDelete.textContent = "Failed - try again";
+      lightboxDelete.disabled = false;
+      return;
+    }
+
+    photoList.splice(currentIndex, 1);
+    closeLightbox();
+    renderGrid();
+  });
+});
+
+// ===== Init =====
 AWS.config.credentials.get(function(err) {
   if (err) {
     console.error("Failed to get credentials:", err);
     viewerCount.textContent = "Failed to load credentials. Please refresh.";
     return;
   }
-  renderGrid();
+  loadPhotos(renderGrid);
 });

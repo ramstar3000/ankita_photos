@@ -19,8 +19,9 @@
         </svg>
         Upload More
       </a>
-      <h1>Your Photos</h1>
+      <h1 id="viewer-title">Your Photos</h1>
       <p id="viewer-count"></p>
+      <p id="viewer-loading" class="hidden">Loading all photos from cloud...</p>
     </div>
 
     <div id="empty-state" class="hidden">
@@ -53,12 +54,15 @@
         <span id="lightbox-name"></span>
         <span id="lightbox-meta"></span>
       </div>
-      <div id="lightbox-actions"></div>
+      <div id="lightbox-actions">
+        <button id="lightbox-delete" class="danger-btn hidden">Delete Photo</button>
+      </div>
     </div>
 
   </div>
 
   <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1692.0.min.js"></script>
+  <script src="config.js"></script>
   <script src="viewer.js"></script>
 </body>
 </html>

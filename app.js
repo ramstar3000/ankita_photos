@@ -1,12 +1,4 @@
-// ===== CONFIGURATION — edit these values =====
-const CONFIG = {
-  REGION: "us-east-1",
-  IDENTITY_POOL_ID: "us-east-1:e9dce307-e5bc-4924-acf4-2f875452dbfc",
-  BUCKET: "ankita-photos-upload",
-  PREFIX: "uploads/",
-  PASSWORD: "photos2026",
-  MAX_FILE_SIZE_MB: 50,
-};
+// CONFIG is loaded from config.js
 
 // ===== AWS Setup =====
 AWS.config.region = CONFIG.REGION;
@@ -69,8 +61,12 @@ function checkSession() {
 
 passwordForm.addEventListener("submit", function(e) {
   e.preventDefault();
-  if (passwordInput.value === CONFIG.PASSWORD) {
+  var val = passwordInput.value;
+  if (val === CONFIG.PASSWORD || val === CONFIG.PASSWORD_ADMIN) {
     sessionStorage.setItem("photo_auth", "true");
+    if (val === CONFIG.PASSWORD_ADMIN) {
+      sessionStorage.setItem("photo_admin", "true");
+    }
     showUploadSection();
   } else {
     passwordError.classList.remove("hidden");
