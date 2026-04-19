@@ -198,51 +198,66 @@ function uploadAll() {
     var card = uploadQueue.children[index];
     card.classList.add("uploading");
 
-    var key = CONFIG.PREFIX + Date.now() + "-" + Math.random().toString(36).substr(2, 6) + "-" + sanitizeFilename(file.name);
+    extractExifDate(file).then(function(exifDate) {
+      var timestamp;
+      if (exifDate && !isNaN(exifDate.getTime())) {
+        timestamp = dateToSortableString(exifDate);
+      } else {
+        timestamp = dateToSortableString(new Date());
+      }
+      var key = CONFIG.PREFIX + timestamp + "-" + Math.random().toString(36).substr(2, 6) + "-" + sanitizeFilename(file.name);
 
-    var params = {
-      Bucket: CONFIG.BUCKET,
-      Key: key,
-      Body: file,
-      ContentType: file.type,
-    };
+      var params = {
+        Bucket: CONFIG.BUCKET,
+        Key: key,
+        Body: file,
+        ContentType: file.type,
+      };
 
-    var progressBar = card.querySelector(".progress-bar");
+      var progressBar = card.querySelector(".progress-bar");
+      var photoDate = exifDate || new Date();
 
-    s3.upload(params)
-      .on("httpUploadProgress", function(evt) {
-        if (evt.total) {
-          var pct = Math.round((evt.loaded / evt.total) * 100);
-          progressBar.style.width = pct + "%";
-        }
-      })
-      .send(function(err) {
-        card.classList.remove("uploading");
-        var icon = document.createElement("span");
-        icon.className = "status-icon";
+      s3.upload(params)
+        .on("httpUploadProgress", function(evt) {
+          if (evt.total) {
+            var pct = Math.round((evt.loaded / evt.total) * 100);
+            progressBar.style.width = pct + "%";
+          }
+        })
+        .send(function(err) {
+          card.classList.remove("uploading");
+          var icon = document.createElement("span");
+          icon.className = "status-icon";
 
-        if (err) {
-          card.classList.add("error");
-          icon.textContent = "\u2717";
-          icon.style.color = "var(--error)";
-          console.error("Upload failed for " + file.name + ":", err);
-          errorCount++;
-        } else {
-          card.classList.add("done");
-          icon.textContent = "\u2713";
-          icon.style.color = "var(--success)";
-          saveToHistory({ name: file.name, size: file.size, key: key, uploadedAt: new Date().toISOString() });
-          successCount++;
-        }
+          if (err) {
+            card.classList.add("error");
+            icon.textContent = "\u2717";
+            icon.style.color = "var(--error)";
+            console.error("Upload failed for " + file.name + ":", err);
+            errorCount++;
+          } else {
+            card.classList.add("done");
+            icon.textContent = "\u2713";
+            icon.style.color = "var(--success)";
+            saveToHistory({
+              name: file.name,
+              size: file.size,
+              key: key,
+              uploadedAt: new Date().toISOString(),
+              takenAt: photoDate.toISOString(),
+            });
+            successCount++;
+          }
 
-        var removeEl = card.querySelector(".remove");
-        if (removeEl) removeEl.replaceWith(icon);
+          var removeEl = card.querySelector(".remove");
+          if (removeEl) removeEl.replaceWith(icon);
 
-        completed++;
-        if (completed === files.length) {
-          onAllDone(successCount, errorCount);
-        }
-      });
+          completed++;
+          if (completed === files.length) {
+            onAllDone(successCount, errorCount);
+          }
+        });
+    });
   });
 }
 
@@ -291,6 +306,94 @@ function renderHistory() {
   var latest = new Date(history[0].uploadedAt);
   historyLatest.textContent = "Last upload: " + formatDate(latest);
 }
+
+// ===== EXIF Date Extraction =====
+function extractExifDate(file) {
+  return new Promise(function(resolve) {
+    if (!file.type || !file.type.match(/image\/jpe?g/i)) {
+      resolve(null);
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        var view = new DataView(e.target.result);
+        // Check JPEG SOI marker
+        if (view.getUint16(0) !== 0xFFD8) { resolve(null); return; }
+        var offset = 2;
+        while (offset < view.byteLength - 2) {
+          var marker = view.getUint16(offset);
+          if (marker === 0xFFE1) { // APP1 (EXIF)
+            var exifDate = parseExifSegment(view, offset + 4);
+            resolve(exifDate);
+            return;
+          }
+          // Skip to next marker
+          var segLen = view.getUint16(offset + 2);
+          offset += 2 + segLen;
+        }
+        resolve(null);
+      } catch (err) {
+        resolve(null);
+      }
+    };
+    reader.onerror = function() { resolve(null); };
+    // Only read first 128KB for EXIF (it's always near the start)
+    reader.readAsArrayBuffer(file.slice(0, 131072));
+  });
+}
+
+function parseExifSegment(view, tiffOffset) {
+  // Check "Exif\0\0"
+  var exifHeader = String.fromCharCode(
+    view.getUint8(tiffOffset), view.getUint8(tiffOffset+1),
+    view.getUint8(tiffOffset+2), view.getUint8(tiffOffset+3)
+  );
+  if (exifHeader !== "Exif") return null;
+
+  var tiffStart = tiffOffset + 6;
+  var byteOrder = view.getUint16(tiffStart);
+  var littleEndian = (byteOrder === 0x4949); // "II"
+
+  var ifdOffset = view.getUint32(tiffStart + 4, littleEndian);
+  return findDateInIFD(view, tiffStart, tiffStart + ifdOffset, littleEndian);
+}
+
+function findDateInIFD(view, tiffStart, ifdStart, le) {
+  var entries = view.getUint16(ifdStart, le);
+  for (var i = 0; i < entries; i++) {
+    var entryOffset = ifdStart + 2 + (i * 12);
+    var tag = view.getUint16(entryOffset, le);
+    // 0x9003 = DateTimeOriginal, 0x9004 = DateTimeDigitized, 0x0132 = DateTime
+    if (tag === 0x9003 || tag === 0x9004 || tag === 0x0132) {
+      var valueOffset = view.getUint32(entryOffset + 8, le);
+      var dateStr = "";
+      for (var j = 0; j < 19; j++) {
+        dateStr += String.fromCharCode(view.getUint8(tiffStart + valueOffset + j));
+      }
+      // Format: "2024:06:15 14:30:22" -> Date object
+      var parts = dateStr.match(/(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+      if (parts) {
+        return new Date(parts[1], parts[2]-1, parts[3], parts[4], parts[5], parts[6]);
+      }
+    }
+    // Check for EXIF sub-IFD pointer (tag 0x8769)
+    if (tag === 0x8769) {
+      var subIfdOffset = view.getUint32(entryOffset + 8, le);
+      var result = findDateInIFD(view, tiffStart, tiffStart + subIfdOffset, le);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+function dateToSortableString(date) {
+  return date.getFullYear()
+    + pad(date.getMonth() + 1) + pad(date.getDate())
+    + "-" + pad(date.getHours()) + pad(date.getMinutes()) + pad(date.getSeconds());
+}
+
+function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
 // ===== Helpers =====
 function sanitizeFilename(name) {
