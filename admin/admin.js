@@ -278,5 +278,13 @@ lightboxDelete.addEventListener("click", function(e) {
   });
 });
 
+// ===== Logout =====
+document.getElementById("admin-logout").addEventListener("click", function() {
+  sessionStorage.removeItem("photo_admin");
+  adminPanel.classList.add("hidden");
+  adminLogin.classList.remove("hidden");
+  adminInput.value = "";
+});
+
 // ===== Init =====
 checkAdminSession();

@@ -75,5 +75,22 @@
 .admin-header-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+}
+
+#admin-logout {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+#admin-logout:hover {
+  color: var(--error);
+  border-color: var(--error);
 }
